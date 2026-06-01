@@ -134,6 +134,93 @@ public class TransactionService {
     }
 
     @Transactional
+    public TransactionResponseDTO update(Long userId, Long transactionId, TransactionDTO dto) {
+
+        Transaction transaction = transactionRepository.findById(transactionId)
+                .orElseThrow(() -> new EntityNotFoundException("Transação não encontrada"));
+
+        if (!transaction.getUser().getId().equals(userId)) {
+            throw new SecurityException("Acesso negado");
+        }
+
+        Account oldAccount = transaction.getAccount();
+
+        // Estorna o efeito do lançamento antigo no saldo
+        if (transaction.getType() == TransactionType.TRANSFER) {
+            if (transaction.getDestinationAccount() != null) {
+                oldAccount.setBalance(oldAccount.getBalance().add(transaction.getAmount()));
+                Account oldDest = transaction.getDestinationAccount();
+                oldDest.setBalance(oldDest.getBalance().subtract(transaction.getAmount()));
+                accountRepository.save(oldDest);
+            } else {
+                oldAccount.setBalance(oldAccount.getBalance().add(transaction.getAmount()));
+            }
+        } else if (oldAccount.getType() == AccountType.CREDIT_CARD) {
+            if (transaction.getType() == TransactionType.EXPENSE) {
+                oldAccount.setInvoice(oldAccount.getInvoice().subtract(transaction.getAmount()));
+            }
+        } else {
+            if (transaction.getType() == TransactionType.INCOME) {
+                oldAccount.setBalance(oldAccount.getBalance().subtract(transaction.getAmount()));
+            } else if (transaction.getType() == TransactionType.EXPENSE) {
+                oldAccount.setBalance(oldAccount.getBalance().add(transaction.getAmount()));
+            }
+        }
+        accountRepository.save(oldAccount);
+
+        // Aplica o novo lançamento
+        Account newAccount = accountRepository.findById(dto.getAccountId())
+                .orElseThrow(() -> new EntityNotFoundException("Conta não encontrada"));
+
+        if (!newAccount.getUser().getId().equals(userId)) {
+            throw new SecurityException("Acesso negado");
+        }
+
+        Category newCategory = null;
+        if (dto.getCategoryId() != null) {
+            newCategory = categoryRepository.findById(dto.getCategoryId())
+                    .orElseThrow(() -> new EntityNotFoundException("Categoria não encontrada"));
+        }
+
+        Account newDestination = null;
+        if (dto.getType() == TransactionType.TRANSFER) {
+            if (dto.getDestinationAccountId() != null) {
+                newDestination = accountRepository.findById(dto.getDestinationAccountId())
+                        .orElseThrow(() -> new EntityNotFoundException("Conta destino não encontrada"));
+                newAccount.setBalance(newAccount.getBalance().subtract(dto.getAmount()));
+                newDestination.setBalance(newDestination.getBalance().add(dto.getAmount()));
+                accountRepository.save(newDestination);
+            } else {
+                newAccount.setBalance(newAccount.getBalance().subtract(dto.getAmount()));
+            }
+        } else if (newAccount.getType() == AccountType.CREDIT_CARD) {
+            if (dto.getType() == TransactionType.EXPENSE) {
+                BigDecimal current = newAccount.getInvoice() != null
+                        ? newAccount.getInvoice() : BigDecimal.ZERO;
+                newAccount.setInvoice(current.add(dto.getAmount()));
+            }
+        } else {
+            if (dto.getType() == TransactionType.INCOME) {
+                newAccount.setBalance(newAccount.getBalance().add(dto.getAmount()));
+            } else if (dto.getType() == TransactionType.EXPENSE) {
+                newAccount.setBalance(newAccount.getBalance().subtract(dto.getAmount()));
+            }
+        }
+        accountRepository.save(newAccount);
+
+        // Atualiza os campos da transação
+        transaction.setAccount(newAccount);
+        transaction.setCategory(newCategory);
+        transaction.setDestinationAccount(newDestination);
+        transaction.setDescription(dto.getDescription());
+        transaction.setAmount(dto.getAmount());
+        transaction.setType(dto.getType());
+        transaction.setDate(dto.getDate());
+
+        return toDTO(transactionRepository.save(transaction));
+    }
+
+    @Transactional
     public void delete(Long userId, Long transactionId) {
         Transaction transaction = transactionRepository.findById(transactionId)
                 .orElseThrow(() -> new EntityNotFoundException("Transação não encontrada"));

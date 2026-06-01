@@ -4,6 +4,7 @@ import com.financeapp.application.dto.ApiResponse;
 import com.financeapp.application.dto.TransactionDTO;
 import com.financeapp.application.dto.TransactionResponseDTO;
 import com.financeapp.application.service.TransactionService;
+import com.financeapp.domain.entity.Transaction;
 import com.financeapp.domain.enums.TransactionType;
 import com.financeapp.domain.repository.UserRepository;
 import jakarta.persistence.EntityNotFoundException;
@@ -59,6 +60,15 @@ public class TransactionController {
                 .status(HttpStatus.CREATED)
                 .body(ApiResponse.ok("Lançamento criado com sucesso", transaction));
     }
+
+    @PutMapping("/{id}")
+    public ResponseEntity<ApiResponse<TransactionResponseDTO>> update(
+            @PathVariable Long id,
+            @Valid @RequestBody TransactionDTO dto){
+        TransactionResponseDTO transaction = transactionService.update(getUserId(), id, dto);
+        return ResponseEntity.ok(ApiResponse.ok("Categoria atualizada", transaction));
+    }
+
 
     @DeleteMapping("/{id}")
     public ResponseEntity<ApiResponse<Void>> delete(@PathVariable Long id) {
