@@ -232,16 +232,30 @@ public class TransactionService {
         Account account = transaction.getAccount();
 
         if (transaction.getType() == TransactionType.TRANSFER) {
+
             if (transaction.getDestinationAccount() != null) {
-                // Estorna transferência entre contas
-                account.setBalance(account.getBalance().add(transaction.getAmount()));
                 Account dest = transaction.getDestinationAccount();
-                dest.setBalance(dest.getBalance().subtract(transaction.getAmount()));
+
+                // Estorna conta origem — devolve o valor debitado
+                account.setBalance(account.getBalance().add(transaction.getAmount()));
+
+                // Estorna conta destino
+                if (dest.getType() == AccountType.CREDIT_CARD) {
+                    // Era pagamento de fatura — restaura a fatura do cartão
+                    BigDecimal current = dest.getInvoice() != null
+                            ? dest.getInvoice() : BigDecimal.ZERO;
+                    dest.setInvoice(current.add(transaction.getAmount()));
+                } else {
+                    // Era transferência entre contas normais — debita do destino
+                    dest.setBalance(dest.getBalance().subtract(transaction.getAmount()));
+                }
                 accountRepository.save(dest);
+
             } else {
-                // Estorna transferência para terceiro
+                // Transferência para terceiros — devolve o valor para a origem
                 account.setBalance(account.getBalance().add(transaction.getAmount()));
             }
+
         } else if (account.getType() == AccountType.CREDIT_CARD) {
             if (transaction.getType() == TransactionType.EXPENSE) {
                 BigDecimal current = account.getInvoice() != null

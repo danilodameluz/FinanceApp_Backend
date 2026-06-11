@@ -11,6 +11,10 @@ import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import com.financeapp.domain.repository.TransactionRepository;
+import com.financeapp.domain.repository.UserRepository;
+import com.financeapp.domain.entity.Transaction;
+import com.financeapp.domain.enums.TransactionType;
 
 import java.math.BigDecimal;
 import java.util.List;
@@ -21,6 +25,7 @@ public class AccountService {
 
     private final AccountRepository accountRepository;
     private final UserRepository userRepository;
+    private final TransactionRepository transactionRepository;
 
     public List<Account> findAllByUser(Long userId) {
         return accountRepository.findByUserId(userId);
@@ -89,8 +94,8 @@ public class AccountService {
             throw new SecurityException("Acesso negado");
         }
 
-        BigDecimal invoice = card.getInvoice() != null ? card.getInvoice() : BigDecimal.ZERO;
-        BigDecimal payAmount = dto.getAmount() != null ? dto.getAmount() : invoice;
+        BigDecimal invoice    = card.getInvoice() != null ? card.getInvoice() : BigDecimal.ZERO;
+        BigDecimal payAmount  = dto.getAmount() != null ? dto.getAmount() : invoice;
 
         if (payAmount.compareTo(invoice) > 0) {
             throw new IllegalArgumentException("Valor maior que a fatura atual");
@@ -100,10 +105,26 @@ public class AccountService {
             throw new IllegalArgumentException("Saldo insuficiente na conta de débito");
         }
 
+        // Atualiza saldos
         debitAccount.setBalance(debitAccount.getBalance().subtract(payAmount));
         card.setInvoice(invoice.subtract(payAmount));
-
         accountRepository.save(debitAccount);
         accountRepository.save(card);
+
+        // Registra lançamento na conta debitada (despesa)
+        User user = userRepository.findById(userId)
+                .orElseThrow(() -> new EntityNotFoundException("Usuário não encontrado"));
+
+        Transaction payment = Transaction.builder()
+                .user(user)
+                .account(debitAccount)
+                .destinationAccount(card)
+                .description("Pagamento fatura — " + card.getName())
+                .amount(payAmount)
+                .type(TransactionType.TRANSFER)
+                .date(java.time.LocalDate.now())
+                .build();
+
+        transactionRepository.save(payment);
     }
 }
