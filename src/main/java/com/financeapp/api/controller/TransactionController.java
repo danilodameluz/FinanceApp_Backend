@@ -4,7 +4,6 @@ import com.financeapp.application.dto.ApiResponse;
 import com.financeapp.application.dto.TransactionDTO;
 import com.financeapp.application.dto.TransactionResponseDTO;
 import com.financeapp.application.service.TransactionService;
-import com.financeapp.domain.entity.Transaction;
 import com.financeapp.domain.enums.TransactionType;
 import com.financeapp.domain.repository.UserRepository;
 import jakarta.persistence.EntityNotFoundException;
@@ -23,11 +22,10 @@ import java.util.List;
 public class TransactionController {
 
     private final TransactionService transactionService;
-    private final UserRepository userRepository;
+    private final UserRepository     userRepository;
 
     private Long getUserId() {
-        String email = SecurityContextHolder.getContext()
-                .getAuthentication().getName();
+        String email = SecurityContextHolder.getContext().getAuthentication().getName();
         return userRepository.findByEmail(email)
                 .orElseThrow(() -> new EntityNotFoundException("Usuário não encontrado"))
                 .getId();
@@ -40,7 +38,6 @@ public class TransactionController {
             @RequestParam(required = false) Integer month) {
 
         List<TransactionResponseDTO> transactions;
-
         if (year != null && month != null) {
             transactions = transactionService.findByUserAndMonth(getUserId(), year, month);
         } else if (type != null) {
@@ -48,8 +45,14 @@ public class TransactionController {
         } else {
             transactions = transactionService.findAllByUser(getUserId());
         }
-
         return ResponseEntity.ok(ApiResponse.ok(transactions));
+    }
+
+    @GetMapping("/future")
+    public ResponseEntity<ApiResponse<List<TransactionResponseDTO>>> findFuture() {
+        return ResponseEntity.ok(ApiResponse.ok(
+                transactionService.findFutureByUser(getUserId())
+        ));
     }
 
     @PostMapping
@@ -58,17 +61,25 @@ public class TransactionController {
         TransactionResponseDTO transaction = transactionService.create(getUserId(), dto);
         return ResponseEntity
                 .status(HttpStatus.CREATED)
-                .body(ApiResponse.ok("Lançamento criado com sucesso", transaction));
+                .body(ApiResponse.ok(
+                        dto.isFuture() ? "Lançamento futuro criado" : "Lançamento criado com sucesso",
+                        transaction
+                ));
+    }
+
+    @PostMapping("/{id}/confirm")
+    public ResponseEntity<ApiResponse<TransactionResponseDTO>> confirm(@PathVariable Long id) {
+        TransactionResponseDTO transaction = transactionService.confirm(getUserId(), id);
+        return ResponseEntity.ok(ApiResponse.ok("Lançamento confirmado com sucesso", transaction));
     }
 
     @PutMapping("/{id}")
     public ResponseEntity<ApiResponse<TransactionResponseDTO>> update(
             @PathVariable Long id,
-            @Valid @RequestBody TransactionDTO dto){
+            @Valid @RequestBody TransactionDTO dto) {
         TransactionResponseDTO transaction = transactionService.update(getUserId(), id, dto);
-        return ResponseEntity.ok(ApiResponse.ok("Categoria atualizada", transaction));
+        return ResponseEntity.ok(ApiResponse.ok("Lançamento atualizado", transaction));
     }
-
 
     @DeleteMapping("/{id}")
     public ResponseEntity<ApiResponse<Void>> delete(@PathVariable Long id) {

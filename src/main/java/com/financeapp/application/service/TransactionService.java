@@ -3,27 +3,28 @@ package com.financeapp.application.service;
 import com.financeapp.application.dto.TransactionDTO;
 import com.financeapp.application.dto.TransactionResponseDTO;
 import com.financeapp.domain.entity.*;
+import com.financeapp.domain.enums.AccountType;
+import com.financeapp.domain.enums.TransactionStatus;
 import com.financeapp.domain.enums.TransactionType;
 import com.financeapp.domain.repository.*;
 import jakarta.persistence.EntityNotFoundException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.util.List;
-import com.financeapp.domain.enums.AccountType;
 
 @Service
 @RequiredArgsConstructor
 public class TransactionService {
 
     private final TransactionRepository transactionRepository;
-    private final AccountRepository accountRepository;
-    private final CategoryRepository categoryRepository;
-    private final UserRepository userRepository;
+    private final AccountRepository     accountRepository;
+    private final CategoryRepository    categoryRepository;
+    private final UserRepository        userRepository;
 
-    // Converte entidade → DTO de resposta
+    // ── DTO ──────────────────────────────────────────
     private TransactionResponseDTO toDTO(Transaction t) {
         return TransactionResponseDTO.builder()
                 .id(t.getId())
@@ -32,6 +33,8 @@ public class TransactionService {
                 .type(t.getType())
                 .date(t.getDate())
                 .createdAt(t.getCreatedAt())
+                .future(t.isFuture())
+                .status(t.getStatus().name())
                 .accountId(t.getAccount() != null ? t.getAccount().getId() : null)
                 .accountName(t.getAccount() != null ? t.getAccount().getName() : null)
                 .categoryId(t.getCategory() != null ? t.getCategory().getId() : null)
@@ -43,8 +46,14 @@ public class TransactionService {
                 .build();
     }
 
+    // ── BUSCAS ───────────────────────────────────────
     public List<TransactionResponseDTO> findAllByUser(Long userId) {
-        return transactionRepository.findByUserIdOrderByDateDesc(userId)
+        return transactionRepository.findByUserIdAndFutureFalseOrderByDateDesc(userId)
+                .stream().map(this::toDTO).toList();
+    }
+
+    public List<TransactionResponseDTO> findFutureByUser(Long userId) {
+        return transactionRepository.findByUserIdAndFutureTrueOrderByDateAsc(userId)
                 .stream().map(this::toDTO).toList();
     }
 
@@ -58,6 +67,7 @@ public class TransactionService {
                 .stream().map(this::toDTO).toList();
     }
 
+    // ── CRIAR ────────────────────────────────────────
     @Transactional
     public TransactionResponseDTO create(Long userId, TransactionDTO dto) {
         User user = userRepository.findById(userId)
@@ -66,9 +76,8 @@ public class TransactionService {
         Account account = accountRepository.findById(dto.getAccountId())
                 .orElseThrow(() -> new EntityNotFoundException("Conta não encontrada"));
 
-        if (!account.getUser().getId().equals(userId)) {
+        if (!account.getUser().getId().equals(userId))
             throw new SecurityException("Acesso negado");
-        }
 
         Category category = null;
         if (dto.getCategoryId() != null) {
@@ -78,46 +87,14 @@ public class TransactionService {
 
         Account destinationAccount = null;
 
-        if (dto.getType() == TransactionType.TRANSFER) {
-
-            if (dto.getDestinationAccountId() != null) {
-                // Transferência entre contas próprias
-                destinationAccount = accountRepository.findById(dto.getDestinationAccountId())
-                        .orElseThrow(() -> new EntityNotFoundException("Conta destino não encontrada"));
-
-                if (!destinationAccount.getUser().getId().equals(userId)) {
-                    throw new SecurityException("Acesso negado à conta destino");
-                }
-
-                // Debita da conta origem
-                account.setBalance(account.getBalance().subtract(dto.getAmount()));
-
-                // Credita na conta destino
-                destinationAccount.setBalance(destinationAccount.getBalance().add(dto.getAmount()));
-                accountRepository.save(destinationAccount);
-
-            } else {
-                // Transferência para terceiro — trata como despesa no saldo
-                account.setBalance(account.getBalance().subtract(dto.getAmount()));
-            }
-
-        } else if (account.getType() == AccountType.CREDIT_CARD) {
-            // Cartão de crédito: acumula na fatura
-            if (dto.getType() == TransactionType.EXPENSE) {
-                BigDecimal current = account.getInvoice() != null
-                        ? account.getInvoice() : BigDecimal.ZERO;
-                account.setInvoice(current.add(dto.getAmount()));
-            }
-        } else {
-            // Conta normal
-            if (dto.getType() == TransactionType.INCOME) {
-                account.setBalance(account.getBalance().add(dto.getAmount()));
-            } else if (dto.getType() == TransactionType.EXPENSE) {
-                account.setBalance(account.getBalance().subtract(dto.getAmount()));
-            }
+        // Lançamentos futuros NÃO alteram saldo
+        if (!dto.isFuture()) {
+            destinationAccount = applyBalanceEffect(dto, account, userId);
+        } else if (dto.getType() == TransactionType.TRANSFER
+                && dto.getDestinationAccountId() != null) {
+            destinationAccount = accountRepository.findById(dto.getDestinationAccountId())
+                    .orElseThrow(() -> new EntityNotFoundException("Conta destino não encontrada"));
         }
-
-        accountRepository.save(account);
 
         Transaction transaction = Transaction.builder()
                 .user(user)
@@ -128,53 +105,63 @@ public class TransactionService {
                 .amount(dto.getAmount())
                 .type(dto.getType())
                 .date(dto.getDate())
+                .future(dto.isFuture())
+                .status(dto.isFuture() ? TransactionStatus.PENDING : TransactionStatus.CONFIRMED)
                 .build();
 
         return toDTO(transactionRepository.save(transaction));
     }
 
+    // ── CONFIRMAR ────────────────────────────────────
+    @Transactional
+    public TransactionResponseDTO confirm(Long userId, Long transactionId) {
+        Transaction t = transactionRepository.findById(transactionId)
+                .orElseThrow(() -> new EntityNotFoundException("Transação não encontrada"));
+
+        if (!t.getUser().getId().equals(userId))
+            throw new SecurityException("Acesso negado");
+
+        if (!t.isFuture() || t.getStatus() == TransactionStatus.CONFIRMED)
+            throw new IllegalArgumentException("Lançamento já confirmado");
+
+        Account account = t.getAccount();
+
+        // Aplica o efeito no saldo agora que foi confirmado
+        TransactionDTO dto = new TransactionDTO();
+        dto.setType(t.getType());
+        dto.setAmount(t.getAmount());
+        dto.setAccountId(account.getId());
+        if (t.getDestinationAccount() != null)
+            dto.setDestinationAccountId(t.getDestinationAccount().getId());
+
+        applyBalanceEffect(dto, account, userId);
+
+        t.setFuture(false);
+        t.setStatus(TransactionStatus.CONFIRMED);
+        t.setDate(LocalDate.now());
+
+        return toDTO(transactionRepository.save(t));
+    }
+
+    // ── ATUALIZAR ─────────────────────────────────────
     @Transactional
     public TransactionResponseDTO update(Long userId, Long transactionId, TransactionDTO dto) {
-
         Transaction transaction = transactionRepository.findById(transactionId)
                 .orElseThrow(() -> new EntityNotFoundException("Transação não encontrada"));
 
-        if (!transaction.getUser().getId().equals(userId)) {
+        if (!transaction.getUser().getId().equals(userId))
             throw new SecurityException("Acesso negado");
+
+        // Estorna somente se já estava confirmado
+        if (!transaction.isFuture()) {
+            revertBalanceEffect(transaction);
         }
 
-        Account oldAccount = transaction.getAccount();
-
-        // Estorna o efeito do lançamento antigo no saldo
-        if (transaction.getType() == TransactionType.TRANSFER) {
-            if (transaction.getDestinationAccount() != null) {
-                oldAccount.setBalance(oldAccount.getBalance().add(transaction.getAmount()));
-                Account oldDest = transaction.getDestinationAccount();
-                oldDest.setBalance(oldDest.getBalance().subtract(transaction.getAmount()));
-                accountRepository.save(oldDest);
-            } else {
-                oldAccount.setBalance(oldAccount.getBalance().add(transaction.getAmount()));
-            }
-        } else if (oldAccount.getType() == AccountType.CREDIT_CARD) {
-            if (transaction.getType() == TransactionType.EXPENSE) {
-                oldAccount.setInvoice(oldAccount.getInvoice().subtract(transaction.getAmount()));
-            }
-        } else {
-            if (transaction.getType() == TransactionType.INCOME) {
-                oldAccount.setBalance(oldAccount.getBalance().subtract(transaction.getAmount()));
-            } else if (transaction.getType() == TransactionType.EXPENSE) {
-                oldAccount.setBalance(oldAccount.getBalance().add(transaction.getAmount()));
-            }
-        }
-        accountRepository.save(oldAccount);
-
-        // Aplica o novo lançamento
         Account newAccount = accountRepository.findById(dto.getAccountId())
                 .orElseThrow(() -> new EntityNotFoundException("Conta não encontrada"));
 
-        if (!newAccount.getUser().getId().equals(userId)) {
+        if (!newAccount.getUser().getId().equals(userId))
             throw new SecurityException("Acesso negado");
-        }
 
         Category newCategory = null;
         if (dto.getCategoryId() != null) {
@@ -183,32 +170,14 @@ public class TransactionService {
         }
 
         Account newDestination = null;
-        if (dto.getType() == TransactionType.TRANSFER) {
-            if (dto.getDestinationAccountId() != null) {
-                newDestination = accountRepository.findById(dto.getDestinationAccountId())
-                        .orElseThrow(() -> new EntityNotFoundException("Conta destino não encontrada"));
-                newAccount.setBalance(newAccount.getBalance().subtract(dto.getAmount()));
-                newDestination.setBalance(newDestination.getBalance().add(dto.getAmount()));
-                accountRepository.save(newDestination);
-            } else {
-                newAccount.setBalance(newAccount.getBalance().subtract(dto.getAmount()));
-            }
-        } else if (newAccount.getType() == AccountType.CREDIT_CARD) {
-            if (dto.getType() == TransactionType.EXPENSE) {
-                BigDecimal current = newAccount.getInvoice() != null
-                        ? newAccount.getInvoice() : BigDecimal.ZERO;
-                newAccount.setInvoice(current.add(dto.getAmount()));
-            }
-        } else {
-            if (dto.getType() == TransactionType.INCOME) {
-                newAccount.setBalance(newAccount.getBalance().add(dto.getAmount()));
-            } else if (dto.getType() == TransactionType.EXPENSE) {
-                newAccount.setBalance(newAccount.getBalance().subtract(dto.getAmount()));
-            }
+        if (!dto.isFuture()) {
+            newDestination = applyBalanceEffect(dto, newAccount, userId);
+        } else if (dto.getType() == TransactionType.TRANSFER
+                && dto.getDestinationAccountId() != null) {
+            newDestination = accountRepository.findById(dto.getDestinationAccountId())
+                    .orElseThrow(() -> new EntityNotFoundException("Conta destino não encontrada"));
         }
-        accountRepository.save(newAccount);
 
-        // Atualiza os campos da transação
         transaction.setAccount(newAccount);
         transaction.setCategory(newCategory);
         transaction.setDestinationAccount(newDestination);
@@ -216,61 +185,95 @@ public class TransactionService {
         transaction.setAmount(dto.getAmount());
         transaction.setType(dto.getType());
         transaction.setDate(dto.getDate());
+        transaction.setFuture(dto.isFuture());
+        transaction.setStatus(dto.isFuture() ? TransactionStatus.PENDING : TransactionStatus.CONFIRMED);
 
         return toDTO(transactionRepository.save(transaction));
     }
 
+    // ── EXCLUIR ───────────────────────────────────────
     @Transactional
     public void delete(Long userId, Long transactionId) {
-        Transaction transaction = transactionRepository.findById(transactionId)
+        Transaction t = transactionRepository.findById(transactionId)
                 .orElseThrow(() -> new EntityNotFoundException("Transação não encontrada"));
 
-        if (!transaction.getUser().getId().equals(userId)) {
+        if (!t.getUser().getId().equals(userId))
             throw new SecurityException("Acesso negado");
+
+        // Estorna somente se confirmado
+        if (!t.isFuture()) {
+            revertBalanceEffect(t);
         }
 
-        Account account = transaction.getAccount();
+        transactionRepository.delete(t);
+    }
 
-        if (transaction.getType() == TransactionType.TRANSFER) {
+    // ── HELPERS ───────────────────────────────────────
+    private Account applyBalanceEffect(TransactionDTO dto, Account account, Long userId) {
+        Account destinationAccount = null;
 
-            if (transaction.getDestinationAccount() != null) {
-                Account dest = transaction.getDestinationAccount();
-
-                // Estorna conta origem — devolve o valor debitado
-                account.setBalance(account.getBalance().add(transaction.getAmount()));
-
-                // Estorna conta destino
-                if (dest.getType() == AccountType.CREDIT_CARD) {
-                    // Era pagamento de fatura — restaura a fatura do cartão
-                    BigDecimal current = dest.getInvoice() != null
-                            ? dest.getInvoice() : BigDecimal.ZERO;
-                    dest.setInvoice(current.add(transaction.getAmount()));
-                } else {
-                    // Era transferência entre contas normais — debita do destino
-                    dest.setBalance(dest.getBalance().subtract(transaction.getAmount()));
-                }
-                accountRepository.save(dest);
-
+        if (dto.getType() == TransactionType.TRANSFER) {
+            if (dto.getDestinationAccountId() != null) {
+                destinationAccount = accountRepository.findById(dto.getDestinationAccountId())
+                        .orElseThrow(() -> new EntityNotFoundException("Conta destino não encontrada"));
+                if (!destinationAccount.getUser().getId().equals(userId))
+                    throw new SecurityException("Acesso negado à conta destino");
+                account.setBalance(account.getBalance().subtract(dto.getAmount()));
+                destinationAccount.setBalance(destinationAccount.getBalance().add(dto.getAmount()));
+                accountRepository.save(destinationAccount);
             } else {
-                // Transferência para terceiros — devolve o valor para a origem
-                account.setBalance(account.getBalance().add(transaction.getAmount()));
+                account.setBalance(account.getBalance().subtract(dto.getAmount()));
             }
-
         } else if (account.getType() == AccountType.CREDIT_CARD) {
-            if (transaction.getType() == TransactionType.EXPENSE) {
+            if (dto.getType() == TransactionType.EXPENSE) {
                 BigDecimal current = account.getInvoice() != null
                         ? account.getInvoice() : BigDecimal.ZERO;
-                account.setInvoice(current.subtract(transaction.getAmount()));
+                account.setInvoice(current.add(dto.getAmount()));
             }
         } else {
-            if (transaction.getType() == TransactionType.INCOME) {
-                account.setBalance(account.getBalance().subtract(transaction.getAmount()));
-            } else if (transaction.getType() == TransactionType.EXPENSE) {
-                account.setBalance(account.getBalance().add(transaction.getAmount()));
+            if (dto.getType() == TransactionType.INCOME) {
+                account.setBalance(account.getBalance().add(dto.getAmount()));
+            } else if (dto.getType() == TransactionType.EXPENSE) {
+                account.setBalance(account.getBalance().subtract(dto.getAmount()));
             }
         }
 
         accountRepository.save(account);
-        transactionRepository.delete(transaction);
+        return destinationAccount;
+    }
+
+    private void revertBalanceEffect(Transaction t) {
+        Account account = t.getAccount();
+
+        if (t.getType() == TransactionType.TRANSFER) {
+            if (t.getDestinationAccount() != null) {
+                account.setBalance(account.getBalance().add(t.getAmount()));
+                Account dest = t.getDestinationAccount();
+                if (dest.getType() == AccountType.CREDIT_CARD) {
+                    BigDecimal current = dest.getInvoice() != null
+                            ? dest.getInvoice() : BigDecimal.ZERO;
+                    dest.setInvoice(current.add(t.getAmount()));
+                } else {
+                    dest.setBalance(dest.getBalance().subtract(t.getAmount()));
+                }
+                accountRepository.save(dest);
+            } else {
+                account.setBalance(account.getBalance().add(t.getAmount()));
+            }
+        } else if (account.getType() == AccountType.CREDIT_CARD) {
+            if (t.getType() == TransactionType.EXPENSE) {
+                BigDecimal current = account.getInvoice() != null
+                        ? account.getInvoice() : BigDecimal.ZERO;
+                account.setInvoice(current.subtract(t.getAmount()));
+            }
+        } else {
+            if (t.getType() == TransactionType.INCOME) {
+                account.setBalance(account.getBalance().subtract(t.getAmount()));
+            } else if (t.getType() == TransactionType.EXPENSE) {
+                account.setBalance(account.getBalance().add(t.getAmount()));
+            }
+        }
+
+        accountRepository.save(account);
     }
 }

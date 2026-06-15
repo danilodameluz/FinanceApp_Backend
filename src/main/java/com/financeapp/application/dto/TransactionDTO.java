@@ -39,4 +39,6 @@ public class TransactionDTO {
     private String categoryName;
     private String categoryIcon;
     private String categoryColor;
+
+    private boolean future = false;
 }
