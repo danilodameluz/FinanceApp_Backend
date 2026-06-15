@@ -34,4 +34,7 @@ public class TransactionResponseDTO {
     // Transferência entre contas próprias
     private Long destinationAccountId;
     private String destinationAccountName;
+
+    private boolean future;
+    private String status;
 }

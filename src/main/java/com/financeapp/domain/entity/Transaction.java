@@ -1,9 +1,12 @@
 package com.financeapp.domain.entity;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
+import com.financeapp.domain.enums.TransactionStatus;
 import com.financeapp.domain.enums.TransactionType;
 import jakarta.persistence.*;
 import lombok.*;
+
+
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -50,6 +53,13 @@ public class Transaction {
 
     @Column(name = "created_at", nullable = false, updatable = false)
     private LocalDateTime createdAt;
+
+    @Column(name = "is_future", nullable = false)
+    private boolean future = false;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    private TransactionStatus status = TransactionStatus.CONFIRMED;
 
     @JsonIgnore
     @ManyToOne(fetch = FetchType.LAZY)
