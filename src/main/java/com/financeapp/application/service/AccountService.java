@@ -3,6 +3,7 @@ package com.financeapp.application.service;
 import com.financeapp.application.dto.AccountDTO;
 import com.financeapp.domain.entity.Account;
 import com.financeapp.domain.entity.User;
+import com.financeapp.domain.enums.TransactionStatus;
 import com.financeapp.domain.repository.AccountRepository;
 import com.financeapp.domain.repository.UserRepository;
 import com.financeapp.application.dto.InvoicePaymentDTO;
@@ -123,6 +124,8 @@ public class AccountService {
                 .amount(payAmount)
                 .type(TransactionType.TRANSFER)
                 .date(java.time.LocalDate.now())
+                .future(false)                           // ← adicione
+                .status(TransactionStatus.CONFIRMED)
                 .build();
 
         transactionRepository.save(payment);
