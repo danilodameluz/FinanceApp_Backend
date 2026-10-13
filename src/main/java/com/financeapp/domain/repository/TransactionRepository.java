@@ -40,4 +40,6 @@ public interface TransactionRepository extends JpaRepository<Transaction, Long> 
             @Param("year") int year,
             @Param("month") int month
     );
+
+    boolean existsByPluggyTransactionId(String pluggyTransactionId);
 }

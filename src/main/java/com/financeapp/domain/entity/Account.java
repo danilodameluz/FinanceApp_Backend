@@ -40,6 +40,12 @@ public class Account {
     @Column(precision = 15, scale = 2)
     private BigDecimal invoice = BigDecimal.ZERO;
 
+    @Column(name = "pluggy_account_id", length = 100)
+    private String pluggyAccountId;
+
+    @Column(name = "pluggy_item_id", length = 100)
+    private String pluggyItemId;
+
     @PrePersist
     public void prePersist() {
         this.createdAt = LocalDateTime.now();

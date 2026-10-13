@@ -66,6 +66,9 @@ public class Transaction {
     @JoinColumn(name = "destination_account_id")
     private Account destinationAccount;
 
+    @Column(name = "pluggy_transaction_id", length = 100, unique = true)
+    private String pluggyTransactionId;
+
     @PrePersist
     public void prePersist() {
         this.createdAt = LocalDateTime.now();
