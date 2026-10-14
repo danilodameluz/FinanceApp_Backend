@@ -225,10 +225,19 @@ public class TransactionService {
                 account.setBalance(account.getBalance().subtract(dto.getAmount()));
             }
         } else if (account.getType() == AccountType.CREDIT_CARD) {
+            BigDecimal current = account.getInvoice() != null
+                    ? account.getInvoice() : BigDecimal.ZERO;
+
             if (dto.getType() == TransactionType.EXPENSE) {
-                BigDecimal current = account.getInvoice() != null
-                        ? account.getInvoice() : BigDecimal.ZERO;
+                // Compra — aumenta a fatura
                 account.setInvoice(current.add(dto.getAmount()));
+            } else if (dto.getType() == TransactionType.INCOME) {
+                // Estorno/crédito — diminui a fatura
+                account.setInvoice(current.subtract(dto.getAmount()));
+                // Garante que a fatura não fique negativa
+                if (account.getInvoice().compareTo(BigDecimal.ZERO) < 0) {
+                    account.setInvoice(BigDecimal.ZERO);
+                }
             }
         } else {
             if (dto.getType() == TransactionType.INCOME) {
@@ -261,10 +270,18 @@ public class TransactionService {
                 account.setBalance(account.getBalance().add(t.getAmount()));
             }
         } else if (account.getType() == AccountType.CREDIT_CARD) {
+            BigDecimal current = account.getInvoice() != null
+                    ? account.getInvoice() : BigDecimal.ZERO;
+
             if (t.getType() == TransactionType.EXPENSE) {
-                BigDecimal current = account.getInvoice() != null
-                        ? account.getInvoice() : BigDecimal.ZERO;
+                // Estorna compra — diminui a fatura
                 account.setInvoice(current.subtract(t.getAmount()));
+                if (account.getInvoice().compareTo(BigDecimal.ZERO) < 0) {
+                    account.setInvoice(BigDecimal.ZERO);
+                }
+            } else if (t.getType() == TransactionType.INCOME) {
+                // Estorna crédito — aumenta a fatura de volta
+                account.setInvoice(current.add(t.getAmount()));
             }
         } else {
             if (t.getType() == TransactionType.INCOME) {
